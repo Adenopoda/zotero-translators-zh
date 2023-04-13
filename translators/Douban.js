@@ -1,7 +1,7 @@
 {
 	"translatorID": "fc353b26-8911-4c34-9196-f6f567c93901",
 	"label": "Douban",
-	"creator": "不是船长<tanguangzhi@foxmail.com>,Ace Strong<acestrong@gmail.com>",
+	"creator": "不是船长<tanguangzhi@foxmail.com>,Ace Strong<acestrong@gmail.com>,阳玉成<yiangyucheng@gmail.com>",
 	"target": "^https?://(www|book)\\.douban\\.com/(subject|doulist|people/[a-zA-Z._]*/(do|wish|collect)|.*?status=(do|wish|collect)|group/[0-9]*?/collection|tag)",
 	"minVersion": "2.0rc1",
 	"maxVersion": "",
@@ -9,7 +9,7 @@
 	"inRepository": true,
 	"translatorType": 4,
 	"browserSupport": "gcsibv",
-	"lastUpdated": "2022-04-14 09:59:01"
+	"lastUpdated": "2023-04-13 11:16:01"
 }
 
 /*
@@ -28,6 +28,8 @@
 
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+   
+   改进了丛书和出版社的抓取问题，合并标题和副标题，原作名扔到短标题 by YX
 */
 
 // #######################
@@ -119,10 +121,12 @@ function scrapeAndParse(doc, url) {
 		// Z.debug(page)
 		var pattern, extra;
 
-		// 类型 & URL
+		// 创建条目并指定类型
 		var itemType = "book";
 		var newItem = new Zotero.Item(itemType);
 		// Zotero.debug(itemType);
+
+		// URL
 		newItem.url = url;
 
 		// 评分
@@ -131,47 +135,35 @@ function scrapeAndParse(doc, url) {
 		if(dbScore==="  "||dbScore===""){
 			dbScore = "?"
 		}
-		
-		
+
 		// 评价人数
 		let commentNum = ZU.xpathText(doc, '//*[@id="interest_sectl"]/div[1]/div[2]/div/div[2]/span/a/span')
-		
-		// 副标题
-		pattern = /<span [^>]*?>副标题:<\/span>(.*?)<br\/>/;
-		if (pattern.test(page)) {
-			var subTitle = pattern.exec(page)[1].trim()
-		}
-		
+
 		// 原作名
 		pattern = /<span [^>]*?>原作名:<\/span>(.*?)<br\/>/;
 		if (pattern.test(page)) {
 			var originalTitle = pattern.exec(page)[1].trim()
 		}
-		
+		// 原作名to短标题
+		newItem.shortTitle = originalTitle;
+
 		// 标题
 		let titleTemp = ""
 		pattern = /<h1>([\s\S]*?)<\/h1>/;
 		if (pattern.test(page)) {
 			var title = pattern.exec(page)[1];
 			title = ZU.trim(trimTags(title))
-			let originalTitlePre = " #"
-			if(!originalTitle){ // 当没有原名时,使用空字符
-				originalTitlePre = ""
-			}
-			if(title === subTitle){ // 判断下副标题与标题一样否,避免重复
-				extra = "👩‍⚖️" + commentNum+";"+"🔟"+dbScore+originalTitlePre+originalTitle
-			} else {
-				extra = "《"+title+" - "+subTitle+"》;"+ "👩‍⚖️" + commentNum+";"+"🔟"+dbScore+originalTitlePre+originalTitle			
-			}
-			extra = extra.replace(/( - )?undefined/g,"").replace("null","0")
-			extra += ';'
+			// 副标题
+			pattern = /<span [^>]*?>副标题:<\/span>(.*?)<br\/>/;
+			if (pattern.test(page)) {
+				var subTitle = pattern.exec(page)[1];
+				//联并标题与副标题
+				title=title+'：'+subTitle;
+		}
 			newItem.title = title;
 		}
 		
 		
-		// 短标题
-		newItem.shortTitle = "《"+title+"》"
-
 
 		// 目录
 		let catalogueList = ZU.xpath(doc, "//div[@class='indent' and contains(@id, 'dir_') and contains(@id, 'full')]")
@@ -296,12 +288,19 @@ function scrapeAndParse(doc, url) {
 			// Zotero.debug("numPages: "+numPages);
 		}
 
-		// 出版社
-		pattern = /<span [^>]*?>出版社:<\/span>(.*?)<br>/;
+		// 出版社 兼容有链接形态与无链接形态
+		pattern = pattern = /<span [^>]*?>出版社:<\/span>\s*<a [^>]*?>(.*?)<\/a>/;
 		if (pattern.test(page)) {
 			var publisher = pattern.exec(page)[1];
-			newItem.publisher = ZU.trim(trimTags(publisher));
+			newItem.publisher = Zotero.Utilities.trim(publisher);
 			// Zotero.debug("publisher: "+publisher);
+		} else {
+			pattern = /<span [^>]*?>出版社:<\/span>(.*?)<br\/>/;
+			if (pattern.test(page)) {
+				var publisher = pattern.exec(page)[1];
+				newItem.publisher = Zotero.Utilities.trim(publisher);
+				// Zotero.debug("publisher: "+publisher);
+			}
 		}
 
 		// 定价
@@ -324,12 +323,14 @@ function scrapeAndParse(doc, url) {
 				price = prefix+numPrice + ';';
 			}
 		}
-		
+		// 定价to备注
+		newItem.extra = price;
+
 		// 丛书
 		pattern = /<span [^>]*?>丛书:<\/span>(.*?)<br\/>/;
 		if (pattern.test(page)) {
 			var series = trimTags(pattern.exec(page)[0]);
-			series = series.split("ISBN")[0].replace("丛书:", "");
+			series = series.split("ISBN")[0].replace("丛书:", "");//这个方法也很巧妙
 			newItem.series = ZU.trim(series);
 			// Zotero.debug("series: "+series);
 		}
@@ -341,21 +342,18 @@ function scrapeAndParse(doc, url) {
 			newItem.date = ZU.trim(date);
 			// Zotero.debug("date: "+date);
 		}
-	 
-		//补全0
+		
+		//补全0（似乎是针对出版年而使用的？）
 		function completeDate(value) {
 			return value < 10 ? "0"+value:value;
 		}
-		// 其他
-		newItem.extra = extra + price;
-	
-		
+
 		// 标签
 		var tags = ZU.xpath(doc, '//div[@id="db-tags-section"]/div[@class="indent"]/span/a[contains(@class, "tag") ]');
 		for (let i in tags) {
 			newItem.tags.push(tags[i].text);
 		}
-		
+
 		// 作者简介
 		let authorInfoList = ZU.xpath(doc, "//span[text()='作者简介']/parent::h2/following-sibling::div//div[@class='intro']")
 		// 这里会获取平级的元素,当有多个时(有展开全部按钮)取最后一个
@@ -370,8 +368,7 @@ function scrapeAndParse(doc, url) {
 			authorInfotwo = authorInfotwo+RegExp.$1+"\n"
 			}
 		}
-	
-		
+
 		// 内容简介
 		// 获取展开全部按钮里面的内容
 		let contentInfoList = ZU.xpath(doc, "//span[text()='内容简介']/parent::h2/following-sibling::div[@id='link-report']//div[@class='intro']")
@@ -393,77 +390,3 @@ function scrapeAndParse(doc, url) {
 		newItem.complete();
 	});
 }
-
-
-/** BEGIN TEST CASES **/
-var testCases = [
-	{
-		"type": "web",
-		"url": "https://book.douban.com/subject/1355643/",
-		"items": [
-			{
-				"itemType": "book",
-				"title": "Norwegian Wood",
-				"creators": [
-					{
-						"firstName": "Haruki",
-						"lastName": "Murakami",
-						"creatorType": "author"
-					},
-					{
-						"firstName": "Jay",
-						"lastName": "Rubin",
-						"creatorType": "translator"
-					}
-				],
-				"date": "2003",
-				"ISBN": "9780099448822",
-				"abstractNote": "When he hears her favourite Beatles song, Toru Watanabe recalls his first love Naoko, the girlfriend of his best friend Kizuki. Immediately he is transported back almost twenty years to his student days in Tokyo, adrift in a world of uneasy friendships, casual sex, passion, loss and desire - to a time when an impetuous young woman called Midori marches into his life and he has ..., (展开全部)",
-				"libraryCatalog": "Douban",
-				"numPages": "389",
-				"publisher": "Vintage",
-				"url": "https://book.douban.com/subject/1355643/",
-				"attachments": [],
-				"tags": [
-					{
-						"tag": "HarukiMurakami"
-					},
-					{
-						"tag": "小说"
-					},
-					{
-						"tag": "挪威森林英文版"
-					},
-					{
-						"tag": "日本"
-					},
-					{
-						"tag": "日本文学"
-					},
-					{
-						"tag": "村上春树"
-					},
-					{
-						"tag": "英文原版"
-					},
-					{
-						"tag": "英文版"
-					}
-				],
-				"notes": [],
-				"seeAlso": []
-			}
-		]
-	},
-	{
-		"type": "web",
-		"url": "https://www.douban.com/doulist/120664512/",
-		"items": "multiple"
-	},
-	{
-		"type": "web",
-		"url": "https://book.douban.com/tag/认知心理学?type=S",
-		"items": "multiple"
-	}
-]
-/** END TEST CASES **/
